@@ -1094,56 +1094,9 @@ function App() {
           </div>
         )}
 
-        <section aria-label="站点搜索" className="relative">
-          <div
-            className={`transition-all duration-300 ${
-              isSearchOpen ? "opacity-100" : "pointer-events-none opacity-0"
-            }`}
-          >
-            <div className="rounded-[34px] bg-gradient-to-r from-brand/40 via-white to-accent/40 p-[1px] dark:from-brand/60 dark:via-slate-900 dark:to-accent/50">
-              <div className="rounded-[32px] bg-white/95 shadow-2xl ring-1 ring-white/60 backdrop-blur dark:bg-slate-900/90 dark:ring-slate-800/80">
-                <div className="flex flex-col gap-3 p-5">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl text-slate-400 dark:text-slate-500" aria-hidden="true">
-                      🔍
-                    </span>
-                    <label className="sr-only" htmlFor="nav-search">
-                      搜索站点
-                    </label>
-                    <input
-                      id="nav-search"
-                      ref={searchInputRef}
-                      type="search"
-                      value={searchTerm}
-                      onChange={(event) => setSearchTerm(event.target.value)}
-                      placeholder="搜索课程、文档或工具（支持拼音/别名）"
-                      className="flex-1 border-none bg-transparent text-lg text-slate-700 outline-none placeholder:text-slate-400 dark:text-slate-100"
-                    />
-                    <span className="hidden select-none items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 md:inline-flex">
-                      ⌘K / Ctrl+K
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
-                    <span className="font-semibold uppercase tracking-widest">快捷筛选</span>
-                    {quickSuggestions.map((item) => (
-                      <button
-                        type="button"
-                        key={item.id}
-                        onClick={() => {
-                          setSearchTerm(item.keyword);
-                          setIsSearchOpen(true);
-                        }}
-                        className="rounded-full bg-slate-100/90 px-3 py-1 text-slate-500 transition hover:bg-brand/10 hover:text-brand dark:bg-slate-800/80 dark:text-slate-200 dark:hover:bg-accent/20 dark:hover:text-accent"
-                      >
-                        #{item.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+        <div className="rounded-3xl border border-dashed border-slate-200/80 bg-white/60 px-5 py-4 text-sm text-slate-500 shadow-inner dark:border-slate-800/80 dark:bg-slate-900/40 dark:text-slate-400">
+          点击右上角放大镜或使用 <span className="font-semibold text-slate-700 dark:text-slate-200">⌘K / Ctrl+K</span> 打开全屏搜索面板。
+        </div>
 
         <section aria-labelledby="category-tabs" className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -1289,6 +1242,108 @@ function App() {
           <span>最后更新：{new Date().toLocaleDateString("zh-CN")}</span>
         </footer>
       </div>
+
+      {isSearchOpen && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/40 px-4 py-10 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="全局搜索面板"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsSearchOpen(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-4xl rounded-[34px] bg-gradient-to-r from-brand/40 via-white to-accent/40 p-[1px] shadow-2xl dark:from-brand/60 dark:via-slate-900 dark:to-accent/50">
+            <div className="rounded-[32px] bg-white/95 dark:bg-slate-900/95">
+              <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 px-6 py-5 dark:border-slate-800">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.4em] text-slate-400 dark:text-slate-500">Search</p>
+                  <h3 className="text-2xl font-semibold text-slate-900 dark:text-white">全局搜索</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">实时过滤 30+ 站点，回车可立即打开</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsSearchOpen(false)}
+                  className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-500 transition hover:border-brand hover:text-brand dark:border-slate-700 dark:text-slate-300"
+                >
+                  关闭
+                </button>
+              </div>
+              <div className="flex flex-col gap-4 px-6 py-5">
+                <div className="flex items-center gap-3 rounded-3xl border border-slate-100 bg-white/80 px-4 py-3 shadow-inner dark:border-slate-800 dark:bg-slate-900/70">
+                  <span className="text-xl text-slate-400 dark:text-slate-500" aria-hidden="true">
+                    🔍
+                  </span>
+                  <label className="sr-only" htmlFor="modal-nav-search">
+                    搜索站点
+                  </label>
+                  <input
+                    id="modal-nav-search"
+                    ref={searchInputRef}
+                    type="search"
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    placeholder="搜索课程、文档或工具（支持拼音/别名）"
+                    className="flex-1 border-none bg-transparent text-lg text-slate-700 outline-none placeholder:text-slate-400 dark:text-slate-100"
+                  />
+                  <span className="hidden select-none items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 md:inline-flex">
+                    ⌘K / Ctrl+K
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
+                  <span className="font-semibold uppercase tracking-widest">快捷筛选</span>
+                  {quickSuggestions.map((item) => (
+                    <button
+                      type="button"
+                      key={item.id}
+                      onClick={() => setSearchTerm(item.keyword)}
+                      className="rounded-full bg-slate-100/90 px-3 py-1 text-slate-500 transition hover:bg-brand/10 hover:text-brand dark:bg-slate-800/80 dark:text-slate-200 dark:hover:bg-accent/20 dark:hover:text-accent"
+                    >
+                      #{item.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-white/80 px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+                  {searchTerm ? `匹配到 ${displayedSites.length} 个站点` : "输入关键词或选择上方标签开始搜索"}
+                </div>
+                <div className="max-h-[360px] overflow-y-auto rounded-2xl border border-slate-100 bg-white/90 shadow-inner dark:border-slate-800 dark:bg-slate-900/80">
+                  {displayedSites.length === 0 ? (
+                    <p className="px-4 py-12 text-center text-sm text-slate-400 dark:text-slate-500">暂未匹配到站点，换个关键词试试吧～</p>
+                  ) : (
+                    <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {displayedSites.map((site) => (
+                        <li key={site.id}>
+                          <a
+                            href={site.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center justify-between gap-4 px-4 py-3 transition hover:bg-brand/5 dark:hover:bg-accent/10"
+                            onClick={() => setIsSearchOpen(false)}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-2xl" aria-hidden="true">{site.emoji ?? "🔗"}</span>
+                              <div>
+                                <p className="text-base font-semibold text-slate-900 dark:text-white">{site.name}</p>
+                                <p className="text-xs text-slate-400 dark:text-slate-500">{site.description}</p>
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-slate-400 dark:text-slate-500">
+                              <p>{site.categoryEmoji} {site.categoryLabel}</p>
+                              <p>{site.shortcut}</p>
+                            </div>
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isEditorOpen && (
         <div className="fixed inset-0 z-40 flex justify-end bg-slate-900/20 backdrop-blur-sm">
