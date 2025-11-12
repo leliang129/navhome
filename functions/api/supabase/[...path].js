@@ -13,7 +13,10 @@ export const onRequest = async ({ request, env, params }) => {
   }
 
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
-    return new Response("Supabase proxy is not configured", { status: 500 });
+    return new Response("Supabase proxy is not configured", {
+      status: 500,
+      headers: buildCorsHeaders(origin),
+    });
   }
 
   const upstreamBase = env.SUPABASE_URL.replace(/\/$/, "");
