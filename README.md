@@ -171,10 +171,10 @@
   - 若网络或 env 缺失则进入“离线模式”，使用本地预设+LocalStorage，并提示需要配置 Supabase。
   - 登录流程：管理员在前端输入邮箱 → Supabase 发送一次性 Magic Link → 登录成功后根据 `app_metadata.role` 判断是否为 admin；仅 admin 可打开站点管理与触发 CRUD。
   - CRUD & 拖拽操作均调用 Supabase API，成功后刷新内存态；失败会提示并回滚。
-- **Cloudflare Worker 代理模式**：浏览器请求统一发往 `/api/supabase/*`，由 `functions/api/supabase/[...path].js` 转发到 Supabase，从而规避国内直连受阻的问题。
+  - **Cloudflare Worker 代理模式**：浏览器请求统一发往 `/api/supabase/*`，由 `functions/api/supabase/[[path]].js` 转发到 Supabase，从而规避国内直连受阻的问题。
 
 ## 15. Cloudflare Supabase 代理
-- **文件**：`functions/api/supabase/[...path].js`，自动匹配 `rest/v1`、`auth/v1` 等路径并携带必要 header。
+- **文件**：`functions/api/supabase/[[path]].js`，自动匹配 `rest/v1`、`auth/v1` 等路径并携带必要 header。
 - **部署步骤**：
   1. 在 Cloudflare Pages 项目中启用 Functions（默认即生效）。
   2. 填写 Functions 环境变量 `SUPABASE_URL` 与 `SUPABASE_ANON_KEY`。
