@@ -80,6 +80,7 @@
 | 前端框架搭建 | 初始化项目、主题切换、分类展示 | 🤖 AI 助手 | T+4 天 | ✅ 已完成 |
 | 站点管理（LocalStorage） | 新增/编辑/删除/拖拽 | 🤖 AI 助手 | T+7 天 | ✅ 已完成 |
 | 测试 & 发布 | 自测 + 部署 | 待定 | T+9 天 | ⏳ 待开始 |
+| Supabase 云同步 | 远端存储、权限控制 | 🤖 AI 助手 | T+10 天 | 🛠️ 进行中 |
 
 ## 11. 风险与对策
 - **范围蔓延**：严格按照 MVP 清单迭代，新增需求需在 README 记录并评审。
@@ -87,17 +88,18 @@
 - **交互复杂度**：拖拽、搜索需选成熟库（如 `dnd-kit`），避免重复造轮子。
 - **依赖下载受限**：全程配置国内镜像（如 `npm config set registry https://registry.npmmirror.com`）。
 
-## 12. 当前迭代：前端框架搭建
-- **开发分支**：`feature/frontend-scaffold`
+## 12. 当前迭代：Supabase 云同步
+- **开发分支**：`feature/supabase-sync`
 - **交付内容**：
-  - 使用 React + Vite 初始化项目结构，并统一改用国内源安装依赖。
-  - 集成 Tailwind CSS，自定义品牌色、暗色模式及渐变背景，奠定视觉基调。
-  - 实现 Header、搜索框、主题切换、分类 Tab 与响应式站点卡片网格，共预置 3 类 15 条站点。
-  - 提供模糊搜索、分类联动与 LocalStorage 主题记忆，确保开箱即用体验。
-- **验证**：`npm run build`、`npm run lint`
+  - 将分类与站点数据的读写切换到 Supabase Postgres，并在请求失败时自动降级至内置预设 + LocalStorage。
+  - 站点新增 / 编辑 / 删除 / 拖拽排序全部直连 Supabase，成功后刷新缓存，保持多端一致。
+  - 在界面内展示“同步中 / 已离线 / 重试”状态提示，避免误判。
+  - 接入 Supabase Auth，管理员登录后才能访问站点管理工作台，前端会精准提示登录状态及权限。
+  - 环境变量统一使用 `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`（可选 `VITE_SUPABASE_REDIRECT_URL`），兼容 Cloudflare Pages 注入方式。
+- **验证**：`npm run lint`、`npm run build` + Supabase 读写冒烟测试。
 - **后续建议**：
-  - 根据 PRD 继续补充拖拽与 CRUD 流程前的线框稿与视觉稿。
-  - 设计站点数据结构与状态管理方案，为后续可编辑模块做准备。
+  - 设计冲突处理策略（本地临时编辑 vs. 远端最新），为多人协作做准备。
+  - 评估性能监控与失败告警方案，方便部署后排查。
 
 ### 12.1 需求变更快照
 - 2025-11-11：根据用户反馈，移除 Header 右侧提示卡片，主题切换改为右上角纯图标按钮，维持页面轻量感。
@@ -105,6 +107,8 @@
 - 2025-11-11：优化搜索区为渐变描边+快捷筛选 Chips，突出核心操作入口并强化可用性。
 - 2025-11-11：新增顶部双 icon（主题/月亮 + 放大镜），搜索改为点击放大镜后弹出的浮动面板，默认保持极简视觉。
 - 2025-11-11：上线纯前端站点管理工作台（新增/编辑/拖拽/重置，全部存入 LocalStorage）。
+- 2025-11-12：确认 MVP 接入 Supabase，要求通过环境变量传入 URL 与 Token，并确保 Cloudflare Pages 部署可直接配置。
+- 2025-11-12：新增“管理员权限”需求，站点管理入口以及所有 CRUD 操作需由 Supabase Auth 鉴权后且用户角色为 `admin` 才能触发。
 
 ## 13. 站点管理（LocalStorage）
 - **状态**：`feature/frontend-scaffold` 分支已交付，等待视觉验收。
@@ -117,7 +121,61 @@
 - **验证**：`npm run build`、`npm run lint`。
 - **后续展望**：
   - 补充批量导入/导出配置能力，方便分享导航模板。
-  - 设计跨设备同步方案（如后续接 Supabase/Firebase）。
+- 设计跨设备同步方案（如后续接 Supabase/Firebase）。
+
+## 14. Supabase 云同步（进行中）
+- **目标**：将站点/分类数据迁移至 Supabase Postgres，实现多人共享、远端持久化与后续权限控制。
+- **当前重点**：
+  - 远端读取失败时的自动降级逻辑，以及缓存刷新策略。
+  - 站点排序、CRUD 操作的事务化与失败回滚提示。
+- **环境变量**：
+  - 本地开发：在根目录创建 `.env.local` 并配置以下键（已提供 `.env.example`）：
+    ```
+    VITE_SUPABASE_URL=https://xomknvyqnrigbxcdbjtx.supabase.co
+    VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvbWtudnlxbnJpZ2J4Y2RianR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NTMzMjUsImV4cCI6MjA3ODMyOTMyNX0.3L1QOc1o3fgZBMnJxlL286uFvMhdWiKJ0JFzbtD-iZs
+    VITE_SUPABASE_REDIRECT_URL=http://localhost:5173
+    ```
+  - Cloudflare Pages：进入项目 `Settings > Environment variables`，添加同名变量即可在构建与运行时生效，避免将密钥写入仓库。
+  > 若需更细权限，请在 Supabase 控制台生成新的 anon/service key，避免泄露数据库 root 密码。
+- **表结构建议**：
+  ```sql
+  create table public.categories (
+    id text primary key,
+    label text not null,
+    emoji text,
+    description text,
+    sort_order int default 0
+  );
+
+  create table public.sites (
+    id text primary key,
+    category_id text references public.categories(id) on delete cascade,
+    name text not null,
+    description text,
+    url text not null,
+    tags text[],
+    shortcut text,
+    emoji text,
+    sort_order int default 0,
+    created_at timestamp with time zone default timezone('utc'::text, now())
+  );
+  ```
+- **数据流**：
+  - App 启动 → 尝试拉取 Supabase 分类/站点 → 成功则渲染远端数据，并缓存到 LocalStorage 作为兜底。
+  - 若网络或 env 缺失则进入“离线模式”，使用本地预设+LocalStorage，并提示需要配置 Supabase。
+  - 登录流程：管理员在前端输入邮箱 → Supabase 发送一次性 Magic Link → 登录成功后根据 `app_metadata.role` 判断是否为 admin；仅 admin 可打开站点管理与触发 CRUD。
+  - CRUD & 拖拽操作均调用 Supabase API，成功后刷新内存态；失败会提示并回滚。
+
+### 14.1 管理员鉴权要求
+- **角色标记**：在 Supabase Dashboard → Authentication → Users 中选中管理员账号，编辑 `App metadata`，设置 `{"role": "admin"}`（或在 `roles` 数组中包含 `admin`）。
+- **Magic Link 配置**：启用 Email OTP/Magic Link 登录，并在项目设置中允许前端域名；`VITE_SUPABASE_REDIRECT_URL` 可指定 Cloudflare Pages 最终 URL，未设置则默认取当前站点。
+- **RLS 建议**：可针对 `sites` / `categories` 表编写 Policy，限制写入操作 `auth.jwt() ->> 'role' = 'admin'`；当前前端已做显式拦截，服务端策略可进一步兜底。
+- **登出与状态**：前端会在导航区展示“管理员 / 访客”状态，提供登录入口与安全退出按钮，未登录时 action button 会提醒无法编辑。
+- **任务拆解**：
+  1. 引入 `@supabase/supabase-js`，封装客户端与错误处理。
+  2. 改造现有站点管理逻辑，使其优先使用 Supabase，LocalStorage 仅作缓存。
+  3. 增加同步状态提示（加载中、离线、失败重试等）。
+  4. 更新测试/部署文档，确保 env 管理规范。
 
 ---
 如需新增需求、设计或开发任务，请先沟通确认，并在 README 的相关章节同步记录。

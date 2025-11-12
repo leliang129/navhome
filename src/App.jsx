@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
+import supabaseClient, { getSupabaseInfo, hasSupabaseConfig } from "./lib/supabaseClient";
 
 const STORAGE_KEY = "nav-home-data";
 
@@ -189,6 +190,142 @@ const quickSuggestions = [
   { id: "fav", label: "收藏夹", keyword: "收藏" },
 ];
 
+const accentFallbacks = [
+  "from-brand/20 to-transparent",
+  "from-accent/30 to-transparent",
+  "from-emerald-400/20 to-transparent",
+  "from-slate-400/20 to-transparent",
+];
+
+const accentLookup = presetCategories.reduce((map, category, index) => {
+  map.set(category.id, category.accent ?? accentFallbacks[index % accentFallbacks.length]);
+  return map;
+}, new Map());
+
+const pickAccentClass = (categoryId, index) => accentLookup.get(categoryId) ?? accentFallbacks[index % accentFallbacks.length];
+
+const createSupabaseSeed = () => {
+  const categoryPayload = presetCategories.map((category, index) => ({
+    id: category.id,
+    label: category.label,
+    description: category.description,
+    emoji: category.emoji,
+    sort_order: index,
+  }));
+
+  const sitePayload = presetCategories.flatMap((category) =>
+    category.sites.map((site, index) => ({
+      id: site.id,
+      category_id: category.id,
+      name: site.name,
+      description: site.description,
+      url: site.url,
+      tags: site.tags ?? [],
+      shortcut: site.shortcut ?? "-",
+      emoji: site.emoji ?? "🔗",
+      sort_order: index,
+    }))
+  );
+
+  return { categoryPayload, sitePayload };
+};
+
+const seedSupabaseWithDefaults = async (client) => {
+  if (!client) return new Error("Supabase client is not available");
+  const { categoryPayload, sitePayload } = createSupabaseSeed();
+  const { error: categoryError } = await client.from("categories").upsert(categoryPayload, { onConflict: "id" });
+  if (categoryError) return categoryError;
+  if (sitePayload.length === 0) return null;
+  const { error: siteError } = await client.from("sites").insert(sitePayload);
+  return siteError ?? null;
+};
+
+const fetchSupabaseSnapshot = async (client) => {
+  if (!client) return { data: null, error: new Error("Supabase client missing") };
+  const { data: categoryRows, error: categoryError } = await client
+    .from("categories")
+    .select("*")
+    .order("sort_order", { ascending: true })
+    .order("label", { ascending: true });
+  if (categoryError) {
+    return { data: null, error: categoryError };
+  }
+
+  const { data: siteRows, error: siteError } = await client
+    .from("sites")
+    .select("*")
+    .order("sort_order", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (siteError) {
+    return { data: null, error: siteError };
+  }
+
+  const categories = (categoryRows ?? []).map((row, index) => ({
+    id: row.id,
+    label: row.label,
+    emoji: row.emoji ?? "📁",
+    description: row.description ?? "",
+    accent: pickAccentClass(row.id, index),
+    sortOrder: row.sort_order ?? index,
+    sites: [],
+  }));
+
+  const categoriesMap = new Map(categories.map((category) => [category.id, category]));
+
+  (siteRows ?? []).forEach((site, index) => {
+    const bucket = categoriesMap.get(site.category_id);
+    if (!bucket) return;
+    bucket.sites.push({
+      id: site.id,
+      name: site.name,
+      description: site.description ?? "",
+      url: site.url,
+      tags: Array.isArray(site.tags) ? site.tags : [],
+      shortcut: site.shortcut ?? "-",
+      emoji: site.emoji ?? "🔗",
+      sortOrder: site.sort_order ?? index,
+    });
+  });
+
+  categories.forEach((category) => {
+    category.sites.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  });
+
+  return { data: categories, error: null };
+};
+
+const ADMIN_ROLE_FLAG = "admin";
+
+const collectRoles = (meta = {}) => {
+  const roles = new Set();
+  const addRole = (value) => {
+    if (typeof value === "string" && value.trim()) {
+      roles.add(value.trim());
+    }
+  };
+  addRole(meta.role);
+  if (Array.isArray(meta.roles)) {
+    meta.roles.forEach(addRole);
+  }
+  return Array.from(roles);
+};
+
+const isAdminUser = (user) => {
+  if (!user) return false;
+  const appRoles = collectRoles(user.app_metadata);
+  const userRoles = collectRoles(user.user_metadata);
+  return [...appRoles, ...userRoles].some((role) => role === ADMIN_ROLE_FLAG);
+};
+
+const toneClassMap = {
+  success: "text-emerald-500 dark:text-emerald-300",
+  error: "text-rose-500 dark:text-rose-300",
+  info: "text-slate-500 dark:text-slate-300",
+};
+
+const getToneClass = (tone = "success") => toneClassMap[tone] ?? toneClassMap.success;
+
 const cloneCategories = (list) =>
   list.map((category) => ({
     ...category,
@@ -263,6 +400,8 @@ const EditIcon = ({ className = "" }) => (
 );
 
 function App() {
+  const supabaseAvailable = hasSupabaseConfig && Boolean(supabaseClient);
+
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "light";
     const saved = window.localStorage.getItem("nav-theme");
@@ -278,9 +417,117 @@ function App() {
   const [editingSiteId, setEditingSiteId] = useState(null);
   const [editingSourceCategoryId, setEditingSourceCategoryId] = useState(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [statusTone, setStatusTone] = useState("success");
+  const [syncState, setSyncState] = useState(() =>
+    supabaseAvailable
+      ? { status: "loading", message: "正在连接 Supabase..." }
+      : { status: "local", message: "" }
+  );
+  const [isSupabaseReady, setIsSupabaseReady] = useState(false);
+  const [isActionSyncing, setIsActionSyncing] = useState(false);
+  const [supabaseUser, setSupabaseUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authTone, setAuthTone] = useState("info");
+  const [authMessage, setAuthMessage] = useState("");
+  const [isSendingLink, setIsSendingLink] = useState(false);
+  const isSupabaseMode = supabaseAvailable && isSupabaseReady;
+  const canManageSites = !supabaseAvailable || isAdmin;
   const searchInputRef = useRef(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+  const syncSupabaseUser = useCallback((user) => {
+    setSupabaseUser(user);
+    setIsAdmin(isAdminUser(user));
+  }, []);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const info = getSupabaseInfo();
+    console.info("[nav-home] Supabase 配置检测", {
+      url: info.url,
+      hasConfig: info.hasConfig,
+    });
+  }, []);
+
+  const refreshFromSupabase = useCallback(
+    async (loadingMessage = "正在刷新云端数据...", successMessage = "云端数据已就绪 ✅") => {
+      if (!supabaseAvailable) return false;
+      setSyncState({ status: "loading", message: loadingMessage });
+      const snapshot = await fetchSupabaseSnapshot(supabaseClient);
+      if (snapshot.error) {
+        console.error("Failed to fetch Supabase data", snapshot.error);
+        setSyncState({
+          status: "error",
+          message: "云端暂不可用，已回退至本地缓存，可稍后点击重试。",
+        });
+        setIsSupabaseReady(false);
+        return false;
+      }
+
+      let records = snapshot.data ?? [];
+      if (records.length === 0) {
+        const seedError = await seedSupabaseWithDefaults(supabaseClient);
+        if (seedError) {
+          console.error("Failed to seed Supabase", seedError);
+          setSyncState({
+            status: "error",
+            message: "云端暂无数据且初始化失败，请稍后重试或检查配置。",
+          });
+          setIsSupabaseReady(false);
+          return false;
+        }
+        const retrySnapshot = await fetchSupabaseSnapshot(supabaseClient);
+        if (retrySnapshot.error) {
+          console.error("Failed to refetch Supabase after seeding", retrySnapshot.error);
+          setSyncState({
+            status: "error",
+            message: "云端初始化后拉取失败，可稍后重试。",
+          });
+          setIsSupabaseReady(false);
+          return false;
+        }
+        records = retrySnapshot.data ?? [];
+      }
+
+      setCategories(cloneCategories(records));
+      setSyncState({ status: "ready", message: successMessage });
+      setIsSupabaseReady(true);
+      return true;
+    },
+    [supabaseAvailable]
+  );
+
+  const persistSupabaseSortOrder = useCallback(
+    async (categoryId, orderedSites) => {
+      if (!isSupabaseMode) return;
+       if (!canManageSites) {
+        setStatusTone("error");
+        setStatusMessage("暂无权限同步排序");
+        return;
+      }
+      setSyncState({ status: "loading", message: "正在同步排序..." });
+      const payload = orderedSites.map((site, index) => ({ id: site.id, sort_order: index }));
+      const { error } = await supabaseClient.from("sites").upsert(payload, { onConflict: "id" });
+      if (error) {
+        console.error("Failed to sync sort order", error);
+        setSyncState({
+          status: "error",
+          message: "排序同步失败，已保留本地顺序，可稍后重试。",
+        });
+        return;
+      }
+      setSyncState({ status: "ready", message: "排序已同步至云端" });
+    },
+    [canManageSites, isSupabaseMode]
+  );
+
+  const handleSupabaseRetry = useCallback(() => {
+    if (!supabaseAvailable) return;
+    refreshFromSupabase("重新连接 Supabase...", "云端已恢复 ✅");
+  }, [refreshFromSupabase, supabaseAvailable]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -290,6 +537,53 @@ function App() {
       window.localStorage.setItem("nav-theme", theme);
     }
   }, [theme]);
+
+  useEffect(() => {
+    if (!supabaseAvailable || !supabaseClient) return;
+    let cancelled = false;
+    const hydrateSession = async () => {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) {
+        console.error("无法获取 Supabase 会话", error);
+        return;
+      }
+      if (!cancelled) {
+        syncSupabaseUser(data.session?.user ?? null);
+      }
+    };
+    hydrateSession();
+    const { data: listener } = supabaseClient.auth.onAuthStateChange((_event, session) => {
+      if (!cancelled) {
+        syncSupabaseUser(session?.user ?? null);
+      }
+    });
+    return () => {
+      cancelled = true;
+      listener?.subscription?.unsubscribe();
+    };
+  }, [supabaseAvailable, syncSupabaseUser]);
+
+  useEffect(() => {
+    if (!supabaseAvailable) return;
+    refreshFromSupabase("正在连接 Supabase...", "已从云端加载最新内容 ✅");
+  }, [refreshFromSupabase, supabaseAvailable]);
+
+  useEffect(() => {
+    if (isAuthModalOpen && canManageSites) {
+      setIsAuthModalOpen(false);
+      setAuthEmail("");
+      setAuthMessage("");
+      setAuthTone("success");
+      setStatusTone("success");
+      setStatusMessage("管理员验证成功，已解锁站点管理 ✨");
+    }
+  }, [canManageSites, isAuthModalOpen]);
+
+  useEffect(() => {
+    if (!canManageSites && isEditorOpen) {
+      setIsEditorOpen(false);
+    }
+  }, [canManageSites, isEditorOpen]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -362,23 +656,44 @@ function App() {
 
   const toggleTheme = () => setTheme((prev) => (prev === "light" ? "dark" : "light"));
 
-  const openEditor = () => setIsEditorOpen(true);
+  const openEditor = () => {
+    if (!canManageSites) {
+      requestAdminAccess("登录管理员账号即可解锁站点管理 ✨");
+      return;
+    }
+    setIsEditorOpen(true);
+  };
 
   const handleDragEnd = (categoryId, event) => {
     const { active, over } = event;
+    if (!canManageSites) {
+      setStatusTone("error");
+      setStatusMessage("暂无权限调整排序，请先登录管理员账号");
+      return;
+    }
     if (!over || active.id === over.id) return;
+    let orderedSites = null;
     setCategories((prev) =>
       prev.map((category) => {
         if (category.id !== categoryId) return category;
         const oldIndex = category.sites.findIndex((site) => site.id === active.id);
         const newIndex = category.sites.findIndex((site) => site.id === over.id);
         if (oldIndex === -1 || newIndex === -1) return category;
+        const nextSites = arrayMove(category.sites, oldIndex, newIndex).map((site, index) => ({
+          ...site,
+          sortOrder: index,
+        }));
+        orderedSites = nextSites;
         return {
           ...category,
-          sites: arrayMove(category.sites, oldIndex, newIndex),
+          sites: nextSites,
         };
       })
     );
+
+    if (isSupabaseMode && orderedSites) {
+      persistSupabaseSortOrder(categoryId, orderedSites);
+    }
   };
 
   const handleEditSite = (site, categoryId) => {
@@ -398,44 +713,100 @@ function App() {
   };
 
   const handleAddSiteShortcut = (categoryId) => {
+    if (!canManageSites) {
+      requestAdminAccess("需要管理员身份才能新增站点～");
+      return;
+    }
     setIsEditorOpen(true);
     setEditingSiteId(null);
     setEditingSourceCategoryId(categoryId);
     setSiteForm(createEmptyForm(categoryId));
   };
 
-  const handleDeleteSite = (categoryId, siteId) => {
-    setCategories((prev) =>
-      prev.map((category) =>
-        category.id === categoryId
-          ? { ...category, sites: category.sites.filter((site) => site.id !== siteId) }
-          : category
-      )
-    );
+  const handleDeleteSite = async (categoryId, siteId) => {
+    if (!canManageSites) {
+      setStatusTone("error");
+      setStatusMessage("暂无权限删除站点");
+      return;
+    }
+    if (isSupabaseMode) {
+      setStatusTone("info");
+      setStatusMessage("正在删除云端站点...");
+      const { error } = await supabaseClient.from("sites").delete().eq("id", siteId);
+      if (error) {
+        console.error("Failed to delete Supabase site", error);
+        setStatusTone("error");
+        setStatusMessage(`删除失败：${error.message}`);
+        return;
+      }
+      await refreshFromSupabase("正在刷新云端数据...", "云端已删除站点 ✂️");
+      setStatusTone("success");
+      setStatusMessage("已删除站点 ✂️");
+    } else {
+      setCategories((prev) =>
+        prev.map((category) =>
+          category.id === categoryId
+            ? { ...category, sites: category.sites.filter((site) => site.id !== siteId) }
+            : category
+        )
+      );
+      setStatusTone("success");
+      setStatusMessage("已删除站点 ✂️");
+    }
+
     if (editingSiteId === siteId) {
       setEditingSiteId(null);
       setSiteForm(createEmptyForm(categoryId));
     }
-    setStatusMessage("已删除站点 ✂️");
   };
 
-  const handleResetDefaults = () => {
+  const handleResetDefaults = async () => {
+    if (!canManageSites) {
+      setStatusTone("error");
+      setStatusMessage("暂无权限执行此操作");
+      return;
+    }
+    if (isSupabaseMode) {
+      setStatusTone("info");
+      setStatusMessage("正在恢复默认数据...");
+      const seedError = await seedSupabaseWithDefaults(supabaseClient);
+      if (seedError) {
+        console.error("Failed to restore defaults on Supabase", seedError);
+        setStatusTone("error");
+        setStatusMessage(`恢复失败：${seedError.message ?? seedError}`);
+        return;
+      }
+      await refreshFromSupabase("正在加载默认数据...", "云端已恢复默认 ✨");
+      const defaults = cloneCategories(presetCategories);
+      setSiteForm(createEmptyForm(defaults[0]?.id));
+      setEditingSiteId(null);
+      setEditingSourceCategoryId(null);
+      setStatusTone("success");
+      setStatusMessage("已恢复默认数据 ✨");
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(STORAGE_KEY);
+      }
+      return;
+    }
+
     const defaults = cloneCategories(presetCategories);
     setCategories(defaults);
     setSiteForm(createEmptyForm(defaults[0]?.id));
     setEditingSiteId(null);
     setEditingSourceCategoryId(null);
+    setStatusTone("success");
     setStatusMessage("已恢复默认数据 ✨");
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(STORAGE_KEY);
     }
   };
 
-  const handleFormSubmit = (event) => {
+  const handleFormSubmit = async (event) => {
     event.preventDefault();
     const name = siteForm.name.trim();
     const url = siteForm.url.trim();
     if (!name || !url) {
+      setStatusTone("error");
       setStatusMessage("名称和链接是必填项哦～");
       return;
     }
@@ -444,6 +815,60 @@ function App() {
     const tags = parseTags(siteForm.tagsText);
     const shortcut = siteForm.shortcut.trim();
     const emoji = siteForm.emoji?.trim() || "🔗";
+
+    if (!canManageSites) {
+      setStatusTone("error");
+      setStatusMessage("暂无权限编辑站点，请先登录管理员账号");
+      return;
+    }
+
+    if (isSupabaseMode) {
+      setStatusTone("info");
+      setStatusMessage(editingSiteId ? "正在更新云端站点..." : "正在新增云端站点...");
+      setIsActionSyncing(true);
+      try {
+        const siteId = editingSiteId ?? generateSiteId();
+        const payload = {
+          name,
+          description: siteForm.description.trim(),
+          url,
+          tags,
+          shortcut: shortcut || "-",
+          emoji,
+          category_id: targetCategoryId,
+        };
+
+        let supabaseError = null;
+        if (editingSiteId) {
+          const { error } = await supabaseClient.from("sites").update(payload).eq("id", siteId);
+          supabaseError = error;
+        } else {
+          const targetCategory = categories.find((category) => category.id === targetCategoryId);
+          const { error } = await supabaseClient
+            .from("sites")
+            .insert({ ...payload, id: siteId, sort_order: targetCategory ? targetCategory.sites.length : 0 });
+          supabaseError = error;
+        }
+
+        if (supabaseError) {
+          throw supabaseError;
+        }
+
+        await refreshFromSupabase("正在刷新云端数据...", "云端已保存 ✅");
+        setStatusTone("success");
+        setStatusMessage(editingSiteId ? "已更新站点 ✅" : "已新增站点 💡");
+        setEditingSiteId(null);
+        setEditingSourceCategoryId(targetCategoryId);
+        setSiteForm(createEmptyForm(targetCategoryId));
+      } catch (error) {
+        console.error("Failed to persist site to Supabase", error);
+        setStatusTone("error");
+        setStatusMessage(`云端操作失败：${error.message ?? error}`);
+      } finally {
+        setIsActionSyncing(false);
+      }
+      return;
+    }
 
     setCategories((prev) => {
       const next = prev.map((category) => ({
@@ -481,10 +906,65 @@ function App() {
       return next;
     });
 
+    setStatusTone("success");
     setStatusMessage(editingSiteId ? "已更新站点 ✅" : "已新增站点 💡");
     setEditingSiteId(null);
     setEditingSourceCategoryId(targetCategoryId);
     setSiteForm(createEmptyForm(targetCategoryId));
+  };
+
+  const handleSignOut = async () => {
+    if (!supabaseAvailable || !supabaseClient) return;
+    await supabaseClient.auth.signOut();
+    setIsEditorOpen(false);
+    setStatusTone("info");
+    setStatusMessage("已退出管理员身份");
+  };
+
+  const requestAdminAccess = (message = "输入管理员邮箱即可获取登录链接～") => {
+    if (!supabaseAvailable) return;
+    setIsAuthModalOpen(true);
+    setAuthTone("info");
+    setAuthMessage(message);
+  };
+
+  const handleCloseAuthModal = () => {
+    setIsAuthModalOpen(false);
+    setAuthTone("info");
+    setAuthMessage("");
+    setAuthEmail("");
+  };
+
+  const handleSendMagicLink = async (event) => {
+    event.preventDefault();
+    if (!supabaseAvailable || !supabaseClient) return;
+    const email = authEmail.trim();
+    if (!email) {
+      setAuthTone("error");
+      setAuthMessage("请输入有效的邮箱地址");
+      return;
+    }
+    setIsSendingLink(true);
+    setAuthTone("info");
+    setAuthMessage("正在发送 Magic Link，请稍候...");
+    const redirectTo =
+      import.meta.env.VITE_SUPABASE_REDIRECT_URL ||
+      (typeof window !== "undefined" ? window.location.origin : undefined);
+    const { error } = await supabaseClient.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: redirectTo,
+      },
+    });
+    if (error) {
+      console.error("Failed to send Magic Link", error);
+      setAuthTone("error");
+      setAuthMessage(`发送失败：${error.message}`);
+    } else {
+      setAuthTone("success");
+      setAuthMessage("登录链接已发送，请检查邮箱完成验证");
+    }
+    setIsSendingLink(false);
   };
 
   const actionButtons = [
@@ -510,6 +990,40 @@ function App() {
     },
   ];
 
+  const syncStateToneClass = (() => {
+    switch (syncState.status) {
+      case "error":
+        return "border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100";
+      case "loading":
+        return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100";
+      case "ready":
+        return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-100";
+      default:
+        return "border-slate-200 bg-white/60 text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300";
+    }
+  })();
+
+  const editorSyncHint = isSupabaseMode
+    ? "所有更改会实时写入 Supabase，并同步到本地缓存保障离线可用。"
+    : supabaseAvailable
+      ? "当前云端不可用，编辑结果仅保存到本地缓存，可稍后点击重试同步。"
+      : "尚未配置 Supabase，数据默认保存在本地浏览器。";
+  const adminStatusLabel = (() => {
+    if (!supabaseAvailable) return "本地模式 · 默认可编辑";
+    if (!supabaseUser) return "未登录 · 无法编辑站点";
+    if (isAdmin) return `管理员 · ${supabaseUser.email}`;
+    return `访客 · ${supabaseUser.email}`;
+  })();
+  const adminStatusTone = !supabaseAvailable ? "success" : isAdmin ? "success" : "info";
+  const adminHelpText = !supabaseAvailable
+    ? "未配置 Supabase 时默认允许编辑。"
+    : isAdmin
+      ? "已通过管理员验证，可放心管理站点。"
+      : "仅 admin 角色可编辑，点击右侧登录或联系管理员添加权限。";
+  const statusToneClass = getToneClass(statusTone);
+  const authToneClass = getToneClass(authTone);
+  const adminStatusClass = getToneClass(adminStatusTone);
+
   return (
     <div className="min-h-screen bg-transparent">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10 md:px-6 lg:px-8 lg:py-14">
@@ -521,14 +1035,64 @@ function App() {
               onClick={button.onClick}
               className={`flex h-12 w-12 items-center justify-center rounded-full border border-transparent bg-white/80 text-slate-600 shadow-md ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:text-brand dark:bg-slate-900/80 dark:text-slate-200 dark:ring-white/10 dark:hover:text-accent ${
                 button.isActive ? "scale-105 text-brand dark:text-accent" : ""
-              }`}
+              } ${button.id === "editor" && !canManageSites ? "opacity-70" : ""}`}
               aria-label={button.label}
               aria-pressed={button.isActive ?? false}
+              title={button.id === "editor" && !canManageSites ? "管理员登录后才可编辑站点" : button.label}
             >
               {button.icon}
             </button>
           ))}
         </div>
+
+        {syncState.message && (
+          <div className={`rounded-2xl border px-4 py-3 text-xs sm:text-sm ${syncStateToneClass}`} role="status">
+            <span>{syncState.message}</span>
+            {syncState.status === "error" && supabaseAvailable && (
+              <button
+                type="button"
+                onClick={handleSupabaseRetry}
+                className="ml-3 underline decoration-dotted underline-offset-4"
+              >
+                重试连接
+              </button>
+            )}
+            {syncState.status === "ready" && isSupabaseMode && (
+              <span className="ml-3 font-semibold text-emerald-600 dark:text-emerald-300">Supabase 已连接</span>
+            )}
+          </div>
+        )}
+
+        {supabaseAvailable && (
+          <div className="rounded-2xl border border-slate-200/90 bg-white/80 px-4 py-3 text-xs text-slate-500 shadow-sm dark:border-slate-800/80 dark:bg-slate-900/70 dark:text-slate-200">
+            <div className="flex flex-col gap-1">
+              <span className={`text-sm font-semibold ${adminStatusClass}`}>{adminStatusLabel}</span>
+              <span className="text-xs text-slate-400 dark:text-slate-500">{adminHelpText}</span>
+              {!isAdmin && supabaseUser && (
+                <span className="text-[11px] text-amber-600 dark:text-amber-300">当前账号尚未被标记为 admin，请联系管理员赋权。</span>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 text-sm">
+              {supabaseUser ? (
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="rounded-full border border-slate-200 px-4 py-1 text-slate-600 transition hover:border-rose-300 hover:text-rose-500 dark:border-slate-700 dark:text-slate-200"
+                >
+                  退出登录
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => requestAdminAccess("请输入管理员邮箱，我们会发送登录链接～")}
+                  className="rounded-full border border-slate-200 px-4 py-1 text-slate-600 transition hover:border-brand hover:text-brand dark:border-slate-700 dark:text-slate-200"
+                >
+                  管理员登录
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         <section aria-label="站点搜索" className="relative">
           <div
@@ -733,7 +1297,7 @@ function App() {
               <div>
                 <p className="text-xs uppercase tracking-[0.4em] text-slate-400 dark:text-slate-500">Edit Mode</p>
                 <h4 className="mt-1 text-2xl font-semibold text-slate-900 dark:text-white">站点管理工作台</h4>
-                <p className="text-sm text-slate-500 dark:text-slate-400">可新增、编辑、拖拽排序并即时保存到本地</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">{editorSyncHint}</p>
               </div>
               <div className="flex flex-col gap-2">
                 <button
@@ -875,7 +1439,12 @@ function App() {
               <div className="flex flex-wrap gap-3">
                 <button
                   type="submit"
-                  className="flex-1 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-brand dark:bg-white dark:text-slate-900"
+                  disabled={isActionSyncing}
+                  className={`flex-1 rounded-2xl px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:-translate-y-0.5 dark:text-slate-900 ${
+                    isActionSyncing
+                      ? "cursor-not-allowed bg-slate-400/80 dark:bg-slate-700/70"
+                      : "bg-slate-900 hover:bg-brand dark:bg-white"
+                  }`}
                 >
                   {editingSiteId ? "保存修改" : "新增站点"}
                 </button>
@@ -884,6 +1453,7 @@ function App() {
                   onClick={() => {
                     setEditingSiteId(null);
                     setSiteForm(createEmptyForm(siteForm.categoryId));
+                    setStatusTone("success");
                     setStatusMessage("已清空表单");
                   }}
                   className="rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-500 transition hover:border-brand hover:text-brand dark:border-slate-700 dark:text-slate-300"
@@ -891,10 +1461,59 @@ function App() {
                   清空
                 </button>
               </div>
-              {statusMessage && <p className="text-xs text-emerald-500">
-                {statusMessage}
-              </p>}
+              {statusMessage && (
+                <p className={`text-xs ${statusToneClass}`}>
+                  {statusMessage}
+                </p>
+              )}
             </form>
+          </div>
+        </div>
+      )}
+
+      {isAuthModalOpen && supabaseAvailable && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-white/30 bg-white/95 p-6 shadow-2xl dark:border-slate-800/80 dark:bg-slate-900">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.4em] text-slate-400 dark:text-slate-500">Admin Login</p>
+                <h4 className="mt-1 text-2xl font-semibold text-slate-900 dark:text-white">管理员登录</h4>
+                <p className="text-sm text-slate-500 dark:text-slate-400">请输入在 Supabase 中被标记为 admin 的邮箱，我们会发送一次性登录链接。</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseAuthModal}
+                className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-500 transition hover:border-brand hover:text-brand dark:border-slate-700 dark:text-slate-300"
+              >
+                关闭
+              </button>
+            </div>
+            <form className="mt-6 space-y-4" onSubmit={handleSendMagicLink}>
+              <div className="grid gap-2">
+                <label className="text-xs text-slate-400 dark:text-slate-500">管理员邮箱 *</label>
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 outline-none focus:border-brand dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  placeholder="you@example.com"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isSendingLink}
+                className={`w-full rounded-2xl px-4 py-2 text-sm font-semibold text-white shadow-lg transition hover:-translate-y-0.5 dark:text-slate-900 ${
+                  isSendingLink ? "cursor-not-allowed bg-slate-400/70 dark:bg-slate-700/70" : "bg-slate-900 hover:bg-brand dark:bg-white"
+                }`}
+              >
+                {isSendingLink ? "发送中..." : "发送 Magic Link"}
+              </button>
+            </form>
+            {authMessage && <p className={`mt-4 text-sm ${authToneClass}`}>{authMessage}</p>}
+            <p className="mt-3 text-xs text-slate-400 dark:text-slate-500">
+              登录成功后若仍无法编辑，请到 Supabase Dashboard → Authentication → Users 中确认该邮箱的 app_metadata / roles 包含 admin。
+            </p>
           </div>
         </div>
       )}
