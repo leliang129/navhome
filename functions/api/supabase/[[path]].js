@@ -20,7 +20,13 @@ export const onRequest = async ({ request, env, params }) => {
   }
 
   const upstreamBase = env.SUPABASE_URL.replace(/\/$/, "");
-  const suffix = params.path ? `/${params.path}` : "";
+  let pathSuffix = "";
+  if (Array.isArray(params.path)) {
+    pathSuffix = `/${params.path.filter(Boolean).join("/")}`;
+  } else if (typeof params.path === "string" && params.path.length > 0) {
+    pathSuffix = `/${params.path}`;
+  }
+  const suffix = pathSuffix;
   const incomingUrl = new URL(request.url);
   const targetUrl = new URL(`${upstreamBase}${suffix}${incomingUrl.search}`);
 
