@@ -111,6 +111,7 @@
 - 2025-11-12：新增“管理员权限”需求，站点管理入口以及所有 CRUD 操作需由 Supabase Auth 鉴权后且用户角色为 `admin` 才能触发。
 - 2025-11-12：放大镜按钮触发的搜索体验调整为全屏弹窗，维持页面极简状态，避免占用主内容空间。
 - 2025-11-12：新增 Cloudflare Worker 级别的 Supabase 代理，解决浏览器直连被阻断的问题。
+- 2025-11-12：Magic Link 模板已改用自定义域名代理，但回跳后仍需排查会话未生效的问题（见 TODO 章节）。
 
 ## 13. 站点管理（LocalStorage）
 - **状态**：`feature/frontend-scaffold` 分支已交付，等待视觉验收。
@@ -183,6 +184,9 @@
 - **调试建议**：
   - 本地仍可直接访问 Supabase（保持 `VITE_SUPABASE_URL` 为真实域名），若需调试代理，可使用 `npx wrangler dev functions/api/supabase` 或 `npx miniflare`。
   - 如需进一步隐藏 anon key，可在 Worker 内改用 `SUPABASE_SERVICE_ROLE_KEY` 并在前端移除 key，但需同步调整 RLS 与鉴权逻辑。
+
+## 16. TODO & 未解决项
+- **Magic Link 登录后仍提示未登录**：邮件跳转已改到自定义域名代理，但回到页面后 session 没有被前端识别。待排查 `redirect_to`、`supabase.auth.setSession` 以及代理 `/auth/v1/verify` 响应是否正确透传 cookie。
 
 ### 14.1 管理员鉴权要求
 - **角色标记**：在 Supabase Dashboard → Authentication → Users 中选中管理员账号，编辑 `App metadata`，设置 `{"role": "admin"}`（或在 `roles` 数组中包含 `admin`）。
