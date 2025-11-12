@@ -110,6 +110,7 @@
 - 2025-11-12：确认 MVP 接入 Supabase，要求通过环境变量传入 URL 与 Token，并确保 Cloudflare Pages 部署可直接配置。
 - 2025-11-12：新增“管理员权限”需求，站点管理入口以及所有 CRUD 操作需由 Supabase Auth 鉴权后且用户角色为 `admin` 才能触发。
 - 2025-11-12：放大镜按钮触发的搜索体验调整为全屏弹窗，维持页面极简状态，避免占用主内容空间。
+- 2025-11-12：新增 Cloudflare Worker 级别的 Supabase 代理，解决浏览器直连被阻断的问题。
 
 ## 13. 站点管理（LocalStorage）
 - **状态**：`feature/frontend-scaffold` 分支已交付，等待视觉验收。
@@ -136,7 +137,11 @@
     VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvbWtudnlxbnJpZ2J4Y2RianR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NTMzMjUsImV4cCI6MjA3ODMyOTMyNX0.3L1QOc1o3fgZBMnJxlL286uFvMhdWiKJ0JFzbtD-iZs
     VITE_SUPABASE_REDIRECT_URL=http://localhost:5173
     ```
-  - Cloudflare Pages：进入项目 `Settings > Environment variables`，添加同名变量即可在构建与运行时生效，避免将密钥写入仓库。
+  - Cloudflare Pages：
+    - `Settings > Environment variables` 中为前端配置同名变量。若需要使用内置代理，请把 `VITE_SUPABASE_URL` 设置为 `https://<your-pages-domain>/api/supabase`（预览环境可改为对应域名）。
+    - `Settings > Functions > Environment variables` 内新增：
+      - `SUPABASE_URL`：真实的 Supabase 项目 URL（与本地一致）。
+      - `SUPABASE_ANON_KEY`：同一个 anon key，Worker 会自动注入请求。
   > 若需更细权限，请在 Supabase 控制台生成新的 anon/service key，避免泄露数据库 root 密码。
 - **表结构建议**：
   ```sql
@@ -166,6 +171,18 @@
   - 若网络或 env 缺失则进入“离线模式”，使用本地预设+LocalStorage，并提示需要配置 Supabase。
   - 登录流程：管理员在前端输入邮箱 → Supabase 发送一次性 Magic Link → 登录成功后根据 `app_metadata.role` 判断是否为 admin；仅 admin 可打开站点管理与触发 CRUD。
   - CRUD & 拖拽操作均调用 Supabase API，成功后刷新内存态；失败会提示并回滚。
+  - **Cloudflare Worker 代理模式**：浏览器请求统一发往 `/api/supabase/*`，由 `functions/api/supabase/[[path]].js` 转发到 Supabase，从而规避国内直连受阻的问题。
+
+## 15. Cloudflare Supabase 代理
+- **文件**：`functions/api/supabase/[[path]].js`，自动匹配 `rest/v1`、`auth/v1` 等路径并携带必要 header。
+- **部署步骤**：
+  1. 在 Cloudflare Pages 项目中启用 Functions（默认即生效）。
+  2. 填写 Functions 环境变量 `SUPABASE_URL` 与 `SUPABASE_ANON_KEY`。
+  3. 将前端构建时的 `VITE_SUPABASE_URL` 指向 `https://<domain>/api/supabase`（预览域名也需对应设置）。
+  4. 重新构建发布即可，浏览器所有 Supabase 流量都会走 Cloudflare 出口。
+- **调试建议**：
+  - 本地仍可直接访问 Supabase（保持 `VITE_SUPABASE_URL` 为真实域名），若需调试代理，可使用 `npx wrangler dev functions/api/supabase` 或 `npx miniflare`。
+  - 如需进一步隐藏 anon key，可在 Worker 内改用 `SUPABASE_SERVICE_ROLE_KEY` 并在前端移除 key，但需同步调整 RLS 与鉴权逻辑。
 
 ### 14.1 管理员鉴权要求
 - **角色标记**：在 Supabase Dashboard → Authentication → Users 中选中管理员账号，编辑 `App metadata`，设置 `{"role": "admin"}`（或在 `roles` 数组中包含 `admin`）。
