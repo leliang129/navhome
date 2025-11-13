@@ -186,7 +186,8 @@
   - 如需进一步隐藏 anon key，可在 Worker 内改用 `SUPABASE_SERVICE_ROLE_KEY` 并在前端移除 key，但需同步调整 RLS 与鉴权逻辑。
 
 ## 16. TODO & 未解决项
-- **Magic Link 登录后仍提示未登录**：邮件跳转已改到自定义域名代理，但回到页面后 session 没有被前端识别。待排查 `redirect_to`、`supabase.auth.setSession` 以及代理 `/auth/v1/verify` 响应是否正确透传 cookie。
+- ~~Magic Link 登录后仍提示未登录~~（2025-11-13 ✅）：前端已新增 Magic Link 回调解析，自动注入 `access_token / refresh_token` 或 `code` 交换逻辑，回跳后可立即识别管理员权限。
+- 暂无新的未解决项，如有新增问题请在此记录。
 
 ### 14.1 管理员鉴权要求
 - **角色标记**：在 Supabase Dashboard → Authentication → Users 中选中管理员账号，编辑 `App metadata`，设置 `{"role": "admin"}`（或在 `roles` 数组中包含 `admin`）。

@@ -452,6 +452,86 @@ function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!supabaseAvailable || !supabaseClient) return;
+    if (typeof window === "undefined") return;
+
+    let disposed = false;
+
+    const handleMagicLinkCallback = async () => {
+      const rawHash = window.location.hash ?? "";
+      const rawSearch = window.location.search ?? "";
+      const hasHashTokens = rawHash.includes("access_token") && rawHash.includes("refresh_token");
+      const hasAuthCode = rawSearch.includes("code=");
+      if (!hasHashTokens && !hasAuthCode) return;
+
+      const hashParams = new URLSearchParams(rawHash.startsWith("#") ? rawHash.slice(1) : rawHash);
+      const searchParams = new URLSearchParams(rawSearch);
+
+      try {
+        let sessionEstablished = false;
+        if (hasHashTokens) {
+          const accessToken = hashParams.get("access_token");
+          const refreshToken = hashParams.get("refresh_token");
+          if (accessToken && refreshToken) {
+            const { error } = await supabaseClient.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (error) throw error;
+            sessionEstablished = true;
+          }
+          const hashKeysToStrip = [
+            "access_token",
+            "refresh_token",
+            "expires_in",
+            "expires_at",
+            "token_type",
+            "type",
+            "provider_token",
+            "provider_refresh_token",
+          ];
+          hashKeysToStrip.forEach((key) => hashParams.delete(key));
+        } else if (hasAuthCode) {
+          const code = searchParams.get("code");
+          if (code) {
+            const { error } = await supabaseClient.auth.exchangeCodeForSession(code);
+            if (error) throw error;
+            sessionEstablished = true;
+          }
+          searchParams.delete("code");
+          searchParams.delete("state");
+        }
+
+        if (sessionEstablished) {
+          const newHash = hashParams.toString();
+          const newSearch = searchParams.toString();
+          const nextUrl =
+            window.location.pathname +
+            (newSearch ? `?${newSearch}` : "") +
+            (newHash ? `#${newHash}` : "");
+          window.history.replaceState(window.history.state, "", nextUrl);
+          if (!disposed) {
+            setStatusTone("success");
+            setStatusMessage("登录成功，正在同步权限…");
+          }
+        }
+      } catch (error) {
+        console.error("处理 Magic Link 回调失败", error);
+        if (!disposed) {
+          setStatusTone("error");
+          setStatusMessage("登录状态同步失败，请重试 Magic Link");
+        }
+      }
+    };
+
+    handleMagicLinkCallback();
+
+    return () => {
+      disposed = true;
+    };
+  }, [supabaseAvailable]);
+
   const refreshFromSupabase = useCallback(
     async (loadingMessage = "正在刷新云端数据...", successMessage = "云端数据已就绪 ✅") => {
       if (!supabaseAvailable) return false;
